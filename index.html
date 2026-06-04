@@ -1,1 +1,260 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>トウジウスDX EX</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;background:#050816;color:white;font-family:system-ui,"Yu Gothic",sans-serif;overflow:hidden;touch-action:none}
+canvas{display:block;width:100vw;height:100vh;background:#050816}
+#menu{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle,#173b92,#050816);z-index:10}
+.card{width:92vw;max-width:470px;text-align:center;padding:24px;border:5px solid #ffd84d;border-radius:22px;background:#081a3bee;box-shadow:0 0 32px #00e5ff}
+h1{font-size:46px;margin:0;color:#ffd84d;text-shadow:4px 4px #e23b68}
+p{font-weight:800;line-height:1.55}
+button{border:0;border-radius:16px;background:linear-gradient(#fff06a,#ff9b00);font-size:21px;font-weight:900;padding:14px 21px;box-shadow:0 7px #8e4d00;color:#241200}
+#controls{position:fixed;left:0;right:0;bottom:0;height:150px;z-index:4;pointer-events:none}
+#up,#down,#shot,#dog{position:absolute;pointer-events:auto}
+#up{left:22px;bottom:82px;width:90px}
+#down{left:22px;bottom:16px;width:90px}
+#shot{right:144px;bottom:36px;width:112px}
+#dog{right:20px;bottom:36px;width:112px}
+.small{font-size:13px;color:#d9edff}
+</style>
+</head>
+<body>
+<canvas id="game" width="390" height="700"></canvas>
+<div id="menu">
+  <div class="card">
+    <h1 id="title">トウジウスDX EX</h1>
+    <p id="sub">〜毎日コツコツ大作戦〜</p>
+    <p id="text">TOJIじいちゃんとブラボー犬で<br>「もう歳だから無理魔王」を倒せ！<br><br>TOJI Tシャツ＝LIFE回復<br>膝サポーター＝ビーム強化<br>魔王はネガティブ弾で攻撃</p>
+    <button id="startBtn">▶ START</button>
+    <p class="small">▲▼で移動 / ビームで攻撃 / 犬で必殺技</p>
+  </div>
+</div>
+<div id="controls">
+  <button id="up">▲</button>
+  <button id="down">▼</button>
+  <button id="shot">ビーム</button>
+  <button id="dog">犬</button>
+</div>
+<script>
+const cvs=document.getElementById("game"),ctx=cvs.getContext("2d");
+const menu=document.getElementById("menu"),title=document.getElementById("title"),sub=document.getElementById("sub"),text=document.getElementById("text"),startBtn=document.getElementById("startBtn");
+let W=390,H=700,state="title",f=0,score=0,boss=false,bossHp=190,bossMax=190,warning=0,ready=90,shake=0;
+let up=false,down=false,shoot=false,bullets=[],enemies=[],items=[],fx=[],stars=[],clouds=[],particles=[],enemyShots=[];
+let p={x:62,y:330,w:85,h:55,life:5,cool:0,dog:3,power:1,inv:0};
+let ac=null;
+let bgmOn=false,bgmTimer=null,bgmStep=0;
+const melody=[392,392,523,392,330,392,494,392,349,349,523,349,294,349,440,349];
+function startBgm(){
+ if(bgmOn)return;
+ bgmOn=true;
+ if(!ac)ac=new (window.AudioContext||window.webkitAudioContext)();
+ bgmTimer=setInterval(()=>{
+  if(state!="play")return;
+  const freq=melody[bgmStep%melody.length];
+  bgmStep++;
+  try{
+   let o=ac.createOscillator(),g=ac.createGain();
+   o.type="square";
+   o.frequency.value=freq;
+   g.gain.value=.018;
+   o.connect(g);g.connect(ac.destination);
+   o.start();
+   g.gain.exponentialRampToValueAtTime(.001,ac.currentTime+.12);
+   o.stop(ac.currentTime+.12);
+  }catch(e){}
+ },155);
+}
+function stopBgm(){bgmOn=false;if(bgmTimer){clearInterval(bgmTimer);bgmTimer=null;}}
+for(let i=0;i<70;i++)stars.push({x:Math.random()*W,y:Math.random()*260,s:Math.random()*2+1,v:Math.random()*1.2+0.4});
+for(let i=0;i<8;i++)clouds.push({x:Math.random()*W,y:60+Math.random()*160,w:55+Math.random()*55,v:.35+Math.random()*.55});
+function sfx(n){
+ try{
+  if(!ac)ac=new (window.AudioContext||window.webkitAudioContext)();
+  let o=ac.createOscillator(),g=ac.createGain();o.connect(g);g.connect(ac.destination);g.gain.value=.055;
+  o.type=n=="damage"?"sawtooth":"square";
+  o.frequency.value={start:660,shot:980,hit:190,item:720,dog:440,damage:120,clear:880,boss:90}[n]||520;
+  o.start();g.gain.exponentialRampToValueAtTime(.001,ac.currentTime+(n=="boss"?.35:n=="damage"?.18:.08));o.stop(ac.currentTime+(n=="boss"?.35:n=="damage"?.18:.08));
+ }catch(e){}
+}
+function bind(id,setter){let b=document.getElementById(id);b.onpointerdown=e=>{setter(true);e.preventDefault()};b.onpointerup=b.onpointercancel=e=>{setter(false);e.preventDefault()}}
+bind("up",v=>up=v);bind("down",v=>down=v);bind("shot",v=>shoot=v);
+document.getElementById("dog").onclick=dogAtk;
+startBtn.onclick=()=>{menu.style.display="none";reset();};
+function reset(){state="play";f=0;score=0;boss=false;bossHp=bossMax;warning=0;ready=90;shake=0;bullets=[];enemies=[];items=[];fx=[];particles=[];enemyShots=[];p={x:62,y:330,w:85,h:55,life:5,cool:0,dog:3,power:1,inv:0};sfx("start");startBgm()}
+function showMenu(t,s,msg,btn){stopBgm();state="menu";menu.style.display="flex";title.textContent=t;sub.textContent=s;text.innerHTML=msg;startBtn.textContent=btn||"▶ もう一回";}
+function hit(a,b){return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y}
+function itemHit(a,b){
+  let cx=a.x+45, cy=a.y+25;
+  let ix=b.x+20, iy=b.y+20;
+  return Math.hypot(cx-ix,cy-iy)<70;
+}
+function addFx(x,y,t,c="#fff",life=42){fx.push({x,y,t,c,life})}
+function burst(x,y,c="#ffd84d"){for(let i=0;i<18;i++)particles.push({x,y,vx:(Math.random()-.5)*7,vy:(Math.random()-.5)*7,life:22,c})}
+function fire(){if(p.cool>0||ready>0)return; for(let i=0;i<p.power;i++)bullets.push({x:p.x+66,y:p.y+20+(i-(p.power-1)/2)*12,w:25,h:8,vx:9.4,d:1,color:"#62f2ff"});p.cool=7;sfx("shot")}
+function howl(){
+ try{
+  if(!ac)ac=new (window.AudioContext||window.webkitAudioContext)();
+  let o=ac.createOscillator(),g=ac.createGain();
+  o.type="sawtooth";
+  o.frequency.setValueAtTime(300,ac.currentTime);
+  o.frequency.exponentialRampToValueAtTime(700,ac.currentTime+.35);
+  g.gain.value=.08;
+  o.connect(g);g.connect(ac.destination);
+  o.start();
+  g.gain.exponentialRampToValueAtTime(.001,ac.currentTime+.55);
+  o.stop(ac.currentTime+.55);
+ }catch(e){}
+}
+function dogAtk(){if(state!="play"||p.dog<=0||ready>0)return;p.dog--;howl();warning=20;for(let i=0;i<22;i++)bullets.push({x:p.x+58,y:p.y+22,w:25,h:9,vx:9,vy:(i-10.5)*.48,d:2,color:"#ffd84d"});addFx(42,p.y-18,"🍞古代パンアタック!","#ffd84d",55)}
+function spawnEnemy(){let arr=[
+ {name:"三日坊主",c:"#28a8ff",hp:3,emoji:"👻"},
+ {name:"ゴロゴロ",c:"#42c756",hp:4,emoji:"🛋"},
+ {name:"言い訳",c:"#ff9f1c",hp:3,emoji:"🐦"}
+];let e=arr[Math.floor(Math.random()*arr.length)];enemies.push({x:420,y:82+Math.random()*430,w:50,h:50,hp:e.hp,max:e.hp,name:e.name,c:e.c,emoji:e.emoji,phase:Math.random()*99})}
+function spawnItem(){items.push({x:420,y:90+Math.random()*430,w:42,h:42,type:Math.random()<.5?"T":"膝"})}
+function damage(){if(p.inv>0)return;p.life--;p.inv=50;shake=12;sfx("damage");addFx(p.x,p.y-12,"いたっ!","#ff6666");if(p.life<=0){
+showMenu("GAME OVER","また明日コツコツ！",
+"1秒後TOJIページへ移動します<br>https://x.gd/2elXh",
+"▶ リトライ");
+setTimeout(()=>{location.href="https://x.gd/2elXh";},1000);
+}}
+function clear(){
+sfx("clear");
+showMenu("GAME CLEAR!","ブラボー！",
+"人生というゲームは<br>何歳からでもスタートできる。<br><br>1秒後TOJIページへ移動します<br>https://x.gd/2elXh",
+"▶ もう一回");
 
+// クリア後自動ジャンプ
+setTimeout(()=>{
+ location.href="https://x.gd/2elXh";
+},1000);
+}
+function update(){
+ if(state!="play")return;f++;if(p.cool>0)p.cool--;if(p.inv>0)p.inv--;if(ready>0)ready--;if(warning>0)warning--;if(shake>0)shake--;
+ stars.forEach(s=>{s.x-=s.v;if(s.x<0){s.x=W;s.y=Math.random()*260}});
+ clouds.forEach(c=>{c.x-=c.v;if(c.x<-120)c.x=W+40});
+ if(up)p.y-=5.4;if(down)p.y+=5.4;if(shoot)fire();p.y=Math.max(72,Math.min(562,p.y));
+ if(!boss&&ready<=0){if(f%48==0)spawnEnemy();if(f%190==0)spawnItem();if(f>1180){boss=true;warning=90;enemies=[];enemyShots=[];sfx("boss");addFx(118,90,"⚠ WARNING","#ff4bd8",85)}}
+ bullets.forEach(b=>{b.x+=b.vx;b.y+=(b.vy||0)});
+ enemies.forEach(e=>{e.x-=3.15;e.y+=Math.sin((f+e.phase)/18)*1.2});
+ items.forEach(i=>i.x-=3.25);
+ for(let b of bullets)for(let e of enemies)if(!b.dead&&hit(b,e)){e.hp-=b.d;b.dead=true;sfx("hit");burst(e.x+25,e.y+25)}
+ enemies=enemies.filter(e=>{if(e.hp<=0){score+=120;addFx(e.x,e.y,"BRAVO!","#ffd84d");burst(e.x+25,e.y+25,e.c);return false}if(e.x<-60||hit(p,e)){damage();return false}return true});
+ items=items.filter(i=>{if(itemHit(p,i)){sfx("item");if(i.type=="T"){
+  p.life = Math.min(9, p.life + 3);
+  addFx(i.x-10,i.y,"TOJIで回復 +3!","#7dff7d",55);
+  burst(i.x,i.y,"#7dff7d");
+}else{
+  p.power=Math.min(4,p.power+1);
+  addFx(i.x-10,i.y,"膝サポーター強化!","#fff36d",55);
+  burst(i.x,i.y,"#fff36d");
+}
+score+=180;
+return false}return i.x>-45});
+ if(boss){
+  let hits=bullets.filter(b=>b.x>295&&b.y>130&&b.y<520);
+  bossHp-=hits.length*.13;
+
+  // 魔王の攻撃：ネガティブ弾を連射
+  if(f%45==0){
+    for(let i=0;i<3;i++){
+      enemyShots.push({
+        x:300,
+        y:180+i*85+Math.sin(f/20)*20,
+        w:18,
+        h:18,
+        vx:-4.2-(bossMax-bossHp)/80,
+        vy:(i-1)*0.8,
+        text:["無理","休め","明日"][i]
+      });
+    }
+    sfx("boss");
+  }
+
+  // HP半分以下で強攻撃
+  if(bossHp < bossMax*0.5 && f%90==0){
+    addFx(210,130,"魔王ラッシュ!","#ff4bd8",45);
+    for(let i=0;i<7;i++){
+      enemyShots.push({
+        x:300,
+        y:130+i*55,
+        w:20,
+        h:20,
+        vx:-5.8,
+        vy:(i-3)*0.35,
+        text:"無理"
+      });
+    }
+  }
+
+  if(f%95==0)burst(330,280,"#a54dff");
+  if(bossHp<=0)clear()
+}
+ enemyShots.forEach(s=>{s.x+=s.vx;s.y+=s.vy});
+for(let s of enemyShots){
+  if(hit(p,s)){
+    s.dead=true;
+    damage();
+  }
+}
+enemyShots=enemyShots.filter(s=>!s.dead&&s.x>-40&&s.y>-30&&s.y<730);
+bullets=bullets.filter(b=>!b.dead&&b.x<430&&b.y>-20&&b.y<720);
+ fx.forEach(a=>{a.y-=.5;a.life--});fx=fx.filter(a=>a.life>0);
+ particles.forEach(q=>{q.x+=q.vx;q.y+=q.vy;q.vy+=.12;q.life--});particles=particles.filter(q=>q.life>0);
+}
+function bg(){
+ let g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,boss?"#140320":"#083b88");g.addColorStop(.38,boss?"#34105a":"#38bfff");g.addColorStop(.43,boss?"#1d102d":"#51bd64");g.addColorStop(1,boss?"#090511":"#155f32");ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+ stars.forEach(s=>{ctx.fillStyle="#fff8";ctx.fillRect(s.x,s.y,s.s,s.s)});
+ clouds.forEach(c=>{ctx.fillStyle=boss?"#4a326a66":"#ffffff66";ctx.beginPath();ctx.ellipse(c.x,c.y,c.w,20,0,0,7);ctx.ellipse(c.x+30,c.y-10,c.w*.55,18,0,0,7);ctx.fill()});
+ ctx.fillStyle=boss?"#221122":"#2e8b47";for(let x=-45;x<W+60;x+=70){ctx.beginPath();ctx.arc(x,470+Math.sin(x)*8,50,0,7);ctx.fill()}
+ ctx.fillStyle=boss?"#332033":"#6b4d2d";ctx.fillRect(104,493,130,15);ctx.fillRect(132,463,10,44);ctx.fillRect(208,463,10,44);
+}
+function drawHero(){
+ ctx.save();ctx.globalAlpha=p.inv&&f%8<4?.45:1;ctx.translate(p.x,p.y);
+ ctx.fillStyle="#d22";ctx.beginPath();ctx.ellipse(43,24,58,24,0,0,7);ctx.fill();
+ ctx.fillStyle="#fff";ctx.fillRect(19,10,48,20);ctx.fillStyle="#111";ctx.font="bold 14px sans-serif";ctx.fillText("TOJI",25,26);
+ ctx.fillStyle="#00eaff";ctx.beginPath();ctx.arc(83,24,13,0,7);ctx.fill();
+ ctx.fillStyle="#f2c28e";ctx.beginPath();ctx.arc(20,-2,16,0,7);ctx.fill();ctx.fillStyle="#fff";ctx.fillRect(3,-19,36,6);ctx.fillStyle="#222";ctx.font="25px serif";ctx.fillText("👴",0,7);
+ ctx.font="26px serif";ctx.fillText("🐶",54,10);
+ ctx.restore();
+}
+function draw(){
+ ctx.save();if(shake>0)ctx.translate((Math.random()-.5)*shake,(Math.random()-.5)*shake);
+ bg();drawHero();
+ bullets.forEach(b=>{ctx.fillStyle=b.color;ctx.shadowColor=b.color;ctx.shadowBlur=10;ctx.fillRect(b.x,b.y,b.w,b.h);ctx.shadowBlur=0});
+ enemies.forEach(e=>{ctx.fillStyle=e.c;ctx.beginPath();ctx.arc(e.x+25,e.y+25,25,0,7);ctx.fill();ctx.font="25px serif";ctx.fillText(e.emoji,e.x+10,e.y+31);ctx.fillStyle="#fff";ctx.font="bold 10px sans-serif";ctx.fillText(e.name,e.x+5,e.y+55);ctx.fillStyle="#000";ctx.fillRect(e.x,e.y-8,50,5);ctx.fillStyle="#ff3b4a";ctx.fillRect(e.x,e.y-8,50*(e.hp/e.max),5)});
+ items.forEach(i=>{ctx.fillStyle=i.type=="T"?"#050505":"#333";
+ctx.fillRect(i.x,i.y,42,42);
+ctx.strokeStyle=i.type=="T"?"#7dff7d":"#fff36d";
+ctx.lineWidth=3;
+ctx.strokeRect(i.x,i.y,42,42);
+ctx.fillStyle=i.type=="T"?"#7dff7d":"#fff";
+ctx.font=i.type=="T"?"bold 12px sans-serif":"bold 13px sans-serif";
+ctx.fillText(i.type=="T"?"TOJI":"膝",i.x+5,i.y+25)});
+ if(boss){ctx.fillStyle="#401060";ctx.fillRect(300,145,82,280);ctx.fillStyle="#7c2bd6";ctx.beginPath();ctx.arc(341,190,55,0,7);ctx.fill();ctx.fillStyle="#ff3333";ctx.beginPath();ctx.arc(323,178,7,0,7);ctx.arc(357,178,7,0,7);ctx.fill();ctx.fillStyle="#fff";ctx.font="bold 15px sans-serif";ctx.fillText("無理",323,250);ctx.fillText("魔王",323,273);ctx.fillStyle="#f33";ctx.fillRect(225,92,Math.max(0,bossHp/bossMax*125),13);ctx.strokeStyle="#fff";ctx.strokeRect(225,92,125,13);ctx.fillStyle="#fff";ctx.font="bold 12px sans-serif";ctx.fillText("もう歳だから無理魔王",214,86)}
+ enemyShots.forEach(s=>{
+  ctx.fillStyle="#ff2b6b";
+  ctx.beginPath();
+  ctx.arc(s.x,s.y,12,0,7);
+  ctx.fill();
+  ctx.fillStyle="#fff";
+  ctx.font="bold 9px sans-serif";
+  ctx.fillText(s.text,s.x-10,s.y+3);
+});
+particles.forEach(q=>{ctx.fillStyle=q.c;ctx.fillRect(q.x,q.y,4,4)});
+ fx.forEach(a=>{ctx.fillStyle=a.c;ctx.font="bold 18px sans-serif";ctx.fillText(a.t,a.x,a.y)});
+ ctx.restore();
+ ctx.fillStyle="#fff";ctx.font="bold 15px sans-serif";ctx.fillText("SCORE "+score,12,24);ctx.fillText("LIFE "+"♥".repeat(p.life),12,48);ctx.fillText("犬 x"+p.dog+"  POWER "+p.power,12,72);
+ ctx.fillStyle="#fff";ctx.font="bold 13px sans-serif";ctx.fillText("TOJI https://x.gd/2elXh",206,684);
+ if(ready>0){ctx.fillStyle="#0008";ctx.fillRect(0,0,W,H);ctx.fillStyle="#ffd84d";ctx.font="bold 42px sans-serif";ctx.fillText(ready>45?"READY":"GO!",110,320)}
+ if(warning>0){ctx.fillStyle="#ff0044";ctx.font="bold 30px sans-serif";ctx.fillText("WARNING!",105,135)}
+ if(state!="play"){ctx.fillStyle="#0008";ctx.fillRect(0,0,W,H)}
+}
+function loop(){update();draw();requestAnimationFrame(loop)}loop();
+</script>
+</body>
+</html>
